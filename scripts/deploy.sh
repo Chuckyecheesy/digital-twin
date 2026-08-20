@@ -71,6 +71,26 @@ else
   terraform workspace select "$ENVIRONMENT"
 fi
 
+# Import S3 buckets
+MEMORY_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-memory-${AWS_ACCOUNT_ID}"
+FRONTEND_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-frontend-${AWS_ACCOUNT_ID}"
+LAMBDA_ROLE="${PROJECT_NAME}-${ENVIRONMENT}-lambda-role"
+
+if ! terraform state list | grep -q 'aws_s3_bucket.memory'; then
+  echo "   Importing S3 memory bucket: $MEMORY_BUCKET"
+  terraform import aws_s3_bucket.memory "$MEMORY_BUCKET" || true
+fi
+
+if ! terraform state list | grep -q 'aws_s3_bucket.frontend'; then
+  echo "   Importing S3 frontend bucket: $FRONTEND_BUCKET"
+  terraform import aws_s3_bucket.frontend "$FRONTEND_BUCKET" || true
+fi
+
+if ! terraform state list | grep -q 'aws_iam_role.lambda_role'; then
+  echo "   Importing IAM Lambda role: $LAMBDA_ROLE"
+  terraform import aws_iam_role.lambda_role "$LAMBDA_ROLE" || true
+fi
+
 # Use prod.tfvars for production environment
 if [ "$ENVIRONMENT" = "prod" ]; then
   TF_APPLY_CMD=(terraform apply -var-file=prod.tfvars -var="project_name=$PROJECT_NAME" -var="environment=$ENVIRONMENT" -auto-approve)
