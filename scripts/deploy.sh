@@ -15,7 +15,6 @@ echo "📦 Building Lambda package..."
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 AWS_REGION=${DEFAULT_AWS_REGION:-us-east-1}
 TF_STATE_BUCKET="twin-terraform-state-${AWS_ACCOUNT_ID}"
-TF_LOCKS_TABLE="twin-terraform-locks"
 
 echo "🪣 Ensuring Terraform state bucket exists..."
 if ! aws s3 ls "s3://${TF_STATE_BUCKET}" 2>/dev/null; then
@@ -26,6 +25,12 @@ if ! aws s3 ls "s3://${TF_STATE_BUCKET}" 2>/dev/null; then
   aws s3api put-bucket-versioning \
     --bucket "${TF_STATE_BUCKET}" \
     --versioning-configuration Status=Enabled \
+    --region "${AWS_REGION}"
+  
+  echo "   Setting bucket ownership controls..."
+  aws s3api put-bucket-ownership-controls \
+    --bucket "${TF_STATE_BUCKET}" \
+    --ownership-controls 'Rules=[{ObjectOwnership=BucketOwnerEnforced}]' \
     --region "${AWS_REGION}"
   
   echo "   Enabling encryption..."
@@ -41,28 +46,13 @@ if ! aws s3 ls "s3://${TF_STATE_BUCKET}" 2>/dev/null; then
     --region "${AWS_REGION}"
 fi
 
-echo "🔒 Ensuring Terraform DynamoDB locking table exists..."
-if ! aws dynamodb describe-table --table-name "${TF_LOCKS_TABLE}" --region "${AWS_REGION}" 2>/dev/null; then
-  echo "   Creating DynamoDB table: ${TF_LOCKS_TABLE}"
-  aws dynamodb create-table \
-    --table-name "${TF_LOCKS_TABLE}" \
-    --attribute-definitions AttributeName=LockID,AttributeType=S \
-    --key-schema AttributeName=LockID,KeyType=HASH \
-    --billing-mode PAY_PER_REQUEST \
-    --region "${AWS_REGION}" \
-    --tags Key=Project,Value=${PROJECT_NAME} Key=ManagedBy,Value=terraform
-  
-  echo "   Waiting for DynamoDB table to be ready..."
-  aws dynamodb wait table-exists --table-name "${TF_LOCKS_TABLE}" --region "${AWS_REGION}"
-fi
-
 # 3. Terraform workspace & apply
 cd terraform
 terraform init -input=false \
   -backend-config="bucket=${TF_STATE_BUCKET}" \
   -backend-config="key=${ENVIRONMENT}/terraform.tfstate" \
   -backend-config="region=${AWS_REGION}" \
-  -backend-config="dynamodb_table=${TF_LOCKS_TABLE}" \
+  -backend-config="use_lockfile=true" \
   -backend-config="encrypt=true"
 
 if ! terraform workspace list | grep -q "$ENVIRONMENT"; then
