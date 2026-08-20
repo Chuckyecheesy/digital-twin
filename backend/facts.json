@@ -1,0 +1,21 @@
+{
+  "full_name": "William (Qiming) Shi",
+  "name": "William",
+  "current_role": "Student",
+  "location": "Richmond Hill, Ontario, Canada",
+  "email": "wqshi@uwaterloo.ca",
+  "linkedin": "www.linkedin.com/in/william-shi-b7a2202bb",
+  "specialties": [
+    "Artificial Intelligence",
+    "Full-Stack Development",
+    "Cloud Computing"
+  ],
+  "years_experience": 1,
+  "education": [
+    {
+      "degree": "Statistics and Computing Minor",
+      "institution": "University of Waterloo",
+      "year": "2028"
+    }
+  ]
+}
