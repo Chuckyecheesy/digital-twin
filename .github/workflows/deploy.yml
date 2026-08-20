@@ -66,6 +66,24 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Import existing IAM role into Terraform state
+        working-directory: ./terraform
+        run: |
+          ENV_NAME=${{ github.event.inputs.environment || 'dev' }}
+          ROLE_NAME="digital-twin-${ENV_NAME}-lambda-role"
+          
+          # Select workspace
+          terraform workspace select $ENV_NAME
+          
+          # Check if role needs to be imported
+          if ! terraform state list | grep -q 'aws_iam_role.lambda_role'; then
+            echo "Importing existing IAM role: $ROLE_NAME"
+            terraform import aws_iam_role.lambda_role $ROLE_NAME || echo "Role import completed or already in state"
+          else
+            echo "IAM role already exists in Terraform state"
+          fi
+        continue-on-error: true
+
       - name: Run Deployment Script
         run: |
           # Set environment variables for the script
