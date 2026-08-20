@@ -42,6 +42,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: github-actions-deploy
           aws-region: ${{ secrets.DEFAULT_AWS_REGION }}
+          use-default-oidc-subject-claim: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
