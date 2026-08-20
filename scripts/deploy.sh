@@ -11,10 +11,46 @@ cd "$(dirname "$0")/.."        # project root
 echo "📦 Building Lambda package..."
 (cd backend && uv run deploy.py)
 
-# 2. Terraform workspace & apply
-cd terraform
+# 2. Bootstrap Terraform state resources (idempotent)
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 AWS_REGION=${DEFAULT_AWS_REGION:-us-east-1}
+STATE_BUCKET="twin-terraform-state-${AWS_ACCOUNT_ID}"
+LOCK_TABLE="twin-terraform-locks"
+
+echo "🔧 Ensuring Terraform state bucket exists..."
+if ! aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+  if [ "$AWS_REGION" = "us-east-1" ]; then
+    aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$AWS_REGION"
+  else
+    aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$AWS_REGION" \
+      --create-bucket-configuration LocationConstraint="$AWS_REGION"
+  fi
+  aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
+    --versioning-configuration Status=Enabled
+  aws s3api put-bucket-encryption --bucket "$STATE_BUCKET" \
+    --server-side-encryption-configuration \
+    '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+  echo "✓ Created S3 bucket: $STATE_BUCKET"
+else
+  echo "✓ S3 bucket already exists: $STATE_BUCKET"
+fi
+
+echo "🔧 Ensuring Terraform lock table exists..."
+if ! aws dynamodb describe-table --table-name "$LOCK_TABLE" --region "$AWS_REGION" >/dev/null 2>&1; then
+  aws dynamodb create-table \
+    --table-name "$LOCK_TABLE" \
+    --attribute-definitions AttributeName=LockID,AttributeType=S \
+    --key-schema AttributeName=LockID,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST \
+    --region "$AWS_REGION"
+  aws dynamodb wait table-exists --table-name "$LOCK_TABLE" --region "$AWS_REGION"
+  echo "✓ Created DynamoDB table: $LOCK_TABLE"
+else
+  echo "✓ DynamoDB table already exists: $LOCK_TABLE"
+fi
+
+# 3. Terraform workspace & apply
+cd terraform
 terraform init -input=false \
   -backend-config="bucket=twin-terraform-state-${AWS_ACCOUNT_ID}" \
   -backend-config="key=${ENVIRONMENT}/terraform.tfstate" \
@@ -54,7 +90,7 @@ if [ -z "$FRONTEND_BUCKET" ]; then
   exit 1
 fi
 
-# 3. Build + deploy frontend
+# 4. Build + deploy frontend
 cd ../frontend
 
 # Create production environment file with API URL
