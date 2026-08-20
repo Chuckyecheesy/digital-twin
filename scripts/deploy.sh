@@ -11,15 +11,58 @@ cd "$(dirname "$0")/.."        # project root
 echo "📦 Building Lambda package..."
 (cd backend && uv run deploy.py)
 
-# 2. Terraform workspace & apply
-cd terraform
+# 2. Ensure Terraform state backend resources exist
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 AWS_REGION=${DEFAULT_AWS_REGION:-us-east-1}
+TF_STATE_BUCKET="twin-terraform-state-${AWS_ACCOUNT_ID}"
+TF_LOCKS_TABLE="twin-terraform-locks"
+
+echo "🪣 Ensuring Terraform state bucket exists..."
+if ! aws s3 ls "s3://${TF_STATE_BUCKET}" 2>/dev/null; then
+  echo "   Creating S3 bucket: ${TF_STATE_BUCKET}"
+  aws s3 mb "s3://${TF_STATE_BUCKET}" --region "${AWS_REGION}"
+  
+  echo "   Enabling versioning..."
+  aws s3api put-bucket-versioning \
+    --bucket "${TF_STATE_BUCKET}" \
+    --versioning-configuration Status=Enabled \
+    --region "${AWS_REGION}"
+  
+  echo "   Enabling encryption..."
+  aws s3api put-bucket-encryption \
+    --bucket "${TF_STATE_BUCKET}" \
+    --server-side-encryption-configuration '{
+      "Rules": [{
+        "ApplyServerSideEncryptionByDefault": {
+          "SSEAlgorithm": "AES256"
+        }
+      }]
+    }' \
+    --region "${AWS_REGION}"
+fi
+
+echo "🔒 Ensuring Terraform DynamoDB locking table exists..."
+if ! aws dynamodb describe-table --table-name "${TF_LOCKS_TABLE}" --region "${AWS_REGION}" 2>/dev/null; then
+  echo "   Creating DynamoDB table: ${TF_LOCKS_TABLE}"
+  aws dynamodb create-table \
+    --table-name "${TF_LOCKS_TABLE}" \
+    --attribute-definitions AttributeName=LockID,AttributeType=S \
+    --key-schema AttributeName=LockID,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST \
+    --region "${AWS_REGION}" \
+    --tags Key=Project,Value=${PROJECT_NAME} Key=ManagedBy,Value=terraform
+  
+  echo "   Waiting for DynamoDB table to be ready..."
+  aws dynamodb wait table-exists --table-name "${TF_LOCKS_TABLE}" --region "${AWS_REGION}"
+fi
+
+# 3. Terraform workspace & apply
+cd terraform
 terraform init -input=false \
-  -backend-config="bucket=twin-terraform-state-${AWS_ACCOUNT_ID}" \
+  -backend-config="bucket=${TF_STATE_BUCKET}" \
   -backend-config="key=${ENVIRONMENT}/terraform.tfstate" \
   -backend-config="region=${AWS_REGION}" \
-  -backend-config="dynamodb_table=twin-terraform-locks" \
+  -backend-config="dynamodb_table=${TF_LOCKS_TABLE}" \
   -backend-config="encrypt=true"
 
 if ! terraform workspace list | grep -q "$ENVIRONMENT"; then
@@ -54,7 +97,7 @@ if [ -z "$FRONTEND_BUCKET" ]; then
   exit 1
 fi
 
-# 3. Build + deploy frontend
+# 4. Build + deploy frontend
 cd ../frontend
 
 # Create production environment file with API URL
@@ -66,7 +109,7 @@ npm run build
 aws s3 sync ./out "s3://$FRONTEND_BUCKET/" --delete
 cd ..
 
-# 4. Final messages
+# 5. Final messages
 echo -e "\n✅ Deployment complete!"
 echo "🌐 CloudFront URL : $(terraform -chdir=terraform output -raw cloudfront_url)"
 if [ -n "$CUSTOM_URL" ]; then
